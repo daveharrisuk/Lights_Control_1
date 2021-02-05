@@ -4,6 +4,7 @@ Arduino Lighting control module for 10 LED strings.
 10 PWM channels drive 10 LED strings. 
 
 Input (Day/Night) triggers channel modes...
+
  DAYNIGHT : Duty cycle (DC) transition on trigger
  DAWN : DC transitions on input changing to day
  DUSK : DC transitions on input changing to night
