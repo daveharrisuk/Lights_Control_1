@@ -1,6 +1,6 @@
 /*file: PIN.h
  *------------------------------------------------------------------------------
- * This is include file for Lights_Control.ino sketch
+ * This is include file for Lights_Control_1.ino sketch
  *
  * Lighting Control module for 10 channels
  * 

@@ -1,6 +1,6 @@
 /*file: CONFIG.h
  *----------------------------------------------------------------------------
- * This is include file for Lights_Control.ino sketch
+ * This is include file for Lights_Control_1.ino sketch
  * 
  * end user adjustable configuration data
  *
@@ -16,8 +16,6 @@
 const char sCONFIGNOTE[] = "DH development testing.."; /* on SerialMonitor  */
 
 const uint16_t VERSION_CONFIG = 0002;           /* display on SerialMonitor */
-
-const uint16_t SENSEAMP = 100 ;                 /* 2 Amp ADC threshold      */
 
 const uint32_t BAUDRATE = 115200;               /* SerialMonitor BAUD rate  */
 
@@ -91,15 +89,15 @@ const Config_t CONFIG[CONFIGSIZE][CHANSIZE] =    /* ReadOnly config array */
  }
  , /* CONFIG adr 3 - Test LED board */
  { /*{secTransit,{secDelay[0],secDelay[1]},{dc[0],dc[1]},mode} */
-/*0*/{  1, {3, 2}, {200, 0}, NIGHTONOFF }, /* blue */
-/*1*/{  5, {1, 1}, {0, 200}, DAYNIGHT }, /* blue */
-/*2*/{  5, {1, 1}, {0, 200}, DAYNIGHT }, /* blue */
+/*0*/{  1, {5, 5}, {30, 200}, NIGHTONOFF }, /* blue */
+/*1*/{  5, {0, 0}, {0, 200}, DAYNIGHT }, /* blue */
+/*2*/{  4, {1, 1}, {0, 200}, DAYNIGHT }, /* blue */
 /*3*/{  5, {1, 2}, {0, 250}, DUSKDAWN}, /* red */
 /*4*/{  2, {1, 2}, {0, 250}, DUSK }, /* red */
 /*5*/{  3, {1, 1}, {0, 250}, DAWN }, /* red */
 /*6*/{  0, {0, 0}, {127, 0}, DAYNIGHT }, /* white */
 /*7*/{  5, {1, 1}, {127, 0}, DAYNIGHT }, /* white */ 
-/*8*/{  1, {3, 6}, {127, 0}, NIGHTONOFF }, /* white */
+/*8*/{  0, {3, 6}, {127, 0}, NIGHTONOFF }, /* white */
 /*9*/{  1, {5, 5}, {0, 200}, NIGHTONOFF }  /* white */    
  }
 };

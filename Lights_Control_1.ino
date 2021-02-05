@@ -1,19 +1,47 @@
 /*file: Lights_Control_1.ino
  *--------------------------------------------------------------------------
  *
- * Layout lighting control module for 10 channels of LED strings
+ * Layout lighting control module for 10 LED strings.
  * 
- * v1 Logic input as trigger
+ * 10 PWM channels drive 10 LED strings. 
+ * 
+ * Input (Day/Night) triggers channel modes...
+ *  DAYNIGHT : Duty cycle (DC) transition on trigger
+ *  DAWN : DC transitions on input changing to day
+ *  DUSK : DC transitions on input changing to night
+ *  DUSKDAWN : DC transitions on input change
+ *  NIGHTONOFF : During night time, LEDs transition at durations
+ * 
+ * Transition config:
+ * - Delay seconds before transitions.
+ * - Transition duration in seconds.
+ * 
+ * Duty Cycle Day and Night config.
+ * 
+ * 
+ * Configurations are defined in seperate CONFIG.h file.
+ * This sketch has 4 configs builtin. Address jumpers select 1 of 4 configs.
+ * 
+ * Over current protection. Audio alarm sounder.
+ * Serial Monitor provides simple diagnostics. 
+ * 
+ * This version uses logic signal input (opto isolated) as day/night trigger.
+ * 
+ * Possible future options...
+ *  SPI bus on PCB to have input trigger via CBUS.
+ *  LCD via I2C bus & rotary encoder for local configuration method.
 */
-const char sTITLE[] = "\n Lights_Control_1 © Dave Harris 2021 v1.00";
-/* 
+
+const char sTITLE[] = "\nLights_Control_1 © Dave Harris 2021 v1.01";
+/*                      -------------------------------------------
  * Author: Dave Harris. Andover, UK.  MERG #2740.
+ * 
  * 
  * TargetPCB : Lights_Control V1.0 revA (see KiCad files)
  * MCU Board : 'MEGA 2560 PRO (EMBED)' (code should be OK on 'Arduino MEGA')
  * Processor : ATmega2560
  * Framework : Arduino 1.8.13
- * FlashMem  : 8.3k of 254k
+ * FlashMem  : 8.4k of 254k
  * GlobalVar : 1.4k of 8k
  * 
  *
@@ -24,6 +52,9 @@ const char sTITLE[] = "\n Lights_Control_1 © Dave Harris 2021 v1.00";
  * 23-Jan-2021 DH, v0.02  add channel Modes
  *  2-Feb-2021 DH, v0.03  add TimerOne lib and 1 ms ISR
  *  4-Feb-2021 DH, v1.00  release
+ *  5-Feb-2021 DH, v1.01  update overAmp. PCB change C3 0.1 uF to 1.0 uF
+ *  
+ *  
  *---------------------------- include files --------------------------------
 */
 
@@ -44,8 +75,8 @@ const char sTITLE[] = "\n Lights_Control_1 © Dave Harris 2021 v1.00";
 
 uint8_t  adr;                 /* address of CONFIG used 0-3  Set in setup() */
 
-bool     input = 0;           /* input state 0 or 1                         */
-
+Input_t  input = DAY;         /* input state 0 Day or 1 night               */
+  
 
 volatile var_t var[CHANSIZE]; /* channel variable array.  Used by ISR       */
 
@@ -58,32 +89,32 @@ extern const Config_t CONFIG[CONFIGSIZE][CHANSIZE]; /* in CONFIG.h          */
 
 
 
-/*------------------------------- soundAlarm() -------------------------------
- * sound AWD piezo buzzer
+/*-------------------------------------- soundAlarm() ----------------------
+ * sound AWD piezo buzzer for n seconds. About 4 kHz.
 */
 
 void soundAlarm( uint8_t seconds )
 {
-  for( uint16_t i = 0; i < ( 5000 * seconds ) ; i++ )
+  for( uint16_t i = 0; i < ( 4000 * seconds ) ; i++ )
   {
-    digitalWrite( PINAWDSIG, HIGH ); /* about 5 kHz */
-    delayMicroseconds( 100 );
+    digitalWrite( PINAWDSIG, HIGH );
+    delayMicroseconds( 121 );
     digitalWrite( PINAWDSIG, LOW );
-    delayMicroseconds( 100 );
+    delayMicroseconds( 121 );
   }  
 }
 
 
 
-/*-------------------------------printConfig()---------------------------------
- * print config to Serial
+/*---------------------------------- printConfig() -------------------------
+ * print channel config to Serial
 */
 
 void printConfig( uint8_t chan )
 {
   char str[70];
   static const char fmt[] = 
-   "ch%u Trn=%03us Dly0=%03us Dly1=%03us dc0=%03u dc1=%03u step=%03ums %s";
+   "ch%u Trn:%03us Dly0:%03us Dly1:%03us dc0:%03u dc1:%03u step:%03ums %s";
   
   sprintf( str, fmt
      , chan
@@ -100,14 +131,14 @@ void printConfig( uint8_t chan )
 
 
 
-/*--------------------------------printVar()---------------------------------
- * debug message
+/*-------------------------------- printVar() -------------------------------
+ * print channel var to Serial
 */
 
 void printVar( uint8_t chan )
 {
   char str[60];
-  static const char fmt[] = "ch%u dc=%03u phase:%u state:%s";
+  static const char fmt[] = " ch%u dc:%03u phase:%u state:%s";
 
   sprintf( str, fmt,
     chan, var[chan].dc, var[chan].phase, sState[var[chan].state] );
@@ -116,24 +147,25 @@ void printVar( uint8_t chan )
 
 
 
-/*-------------------------------- printAmps() -------------------------------
- * debug message
+/*------------------------------------------ printAmps() --------------------
+ * prints, roughly, measured mA to Serial
+ * displays as multiples of 20 mA   ## anything below 20mA shows as zero ##
 */
 
 void printAmps()
 {
   char str[60];
-  static const char fmt[] = "%u Amp";
-  sprintf( str, fmt, amps );
+  static const char fmt[] = " %u mA";
+  sprintf( str, fmt, ( amps * 20 ) );
   
   Serial.println( str );
 }
 
 
 
-/*------------------------------ readConfigAdr() -----------------------------
+/*----------------------------------- readConfigAdr() -----------------------
  * 
- * read the config address from the address jumpers into global var adr   0-3
+ * read the config address from the address jumpers into global var adr  0-3
 */
 
 void readConfigAdr()
@@ -146,61 +178,60 @@ void readConfigAdr()
 
 
 
-/*------------------------------startNewPhase() ------------------------------
+/*------------------------------------ startNewPhase() ----------------------
  * 
- * The input has changed, so setup new phase for each channel
+ * setup new phase for each channel, as the day/night input has changed
 */
 
 void startNewPhase()
 {
-  noInterrupts();              /* all variables here are manipulated by ISR */
+  noInterrupts();        /* all variables here are manipulated by interrupt */
   
   for( uint8_t ch = 0; ch < CHANSIZE; ch++ )          /* loop all channels  */
   {
     var[ch].secCount = 0;
     var[ch].msCount = 0;
 
-    var[ch].state = TRANSIT;          /* default values - updated by switch */
-    var[ch].phase = 0;                /* allow dc to transit back to dc0    */
+    var[ch].state = TRANSIT;      /* default values - updated by switch     */
+    var[ch].phase = 0;            /* this allows dc to transit back to dc0  */
 
     switch( CONFIG[adr][ch].mode )
     {
-      case DAYNIGHT :
+      case DAYNIGHT :             /* either input edge starts DAYNIGHT      */
         var[ch].state = DELAY;
-        var[ch].phase = input;
+        var[ch].phase = input;    /* phase 0 = 0 (day), phase 1 = 1 (night) */
         break;
         
-      case DUSK :
-        if( input == 1 )
+      case DUSK :                 /* just day to night starts dawn          */
+        if( input == NIGHT )
         {
           var[ch].state = DELAY;
           var[ch].phase = 1;
         }
         break;
         
-      case DAWN :
-        if( input == 0 )
+      case DAWN :                 /* just night to day starts dawn          */
+        if( input == DAY )
         {
           var[ch].state = DELAY;
           var[ch].phase = 1;
         }
         break;
         
-      case DUSKDAWN :
+      case DUSKDAWN :             /* either input edge starts dusk or dawn  */
         var[ch].state = DELAY;
         var[ch].phase = 1;
         break;
         
-      case NIGHTONOFF :
-        if( input == 1 )
+      case NIGHTONOFF :           /* just day to night starts NIGHTONOFF    */
+        if( input == NIGHT )
         {
           var[ch].state = DELAY;
           var[ch].phase = 1;
         }
         break;
     }
-  } /* end of loop */
-  
+  }                                                         /* end of loop  */
   interrupts();
 }
 
@@ -208,8 +239,7 @@ void startNewPhase()
 
 /*-------------------------------- processChannels() -------------------------
  * 
- * timer1 Interrupt Service Routine every 1 milli second
- * 
+ * timer1 Interrupt Service Routine runs every 1 milli second
  * 
  * cycle though the channels and process them
  * 
@@ -218,7 +248,6 @@ void startNewPhase()
  * secs to delay is in CONFIG[ch].secDelay[phase]     0-255
  * Delay seconds counter is in var[ch].secCount       0-255
  * ms between inc/dec steps is in var[ch].msPerStep   0-1000
- *
 */
 
 void processChannels()          /*! This is an ISR which runs every 1 ms  !*/
@@ -227,33 +256,31 @@ void processChannels()          /*! This is an ISR which runs every 1 ms  !*/
                                 /* pulse width high = ISR run time.        */
                                 /* 16 MHz ATmega2560 min 21 us, peak 87 us */
 
-  uint8_t countTransits = 0;    /* sets LED_builtin if Transits active     */
+  uint8_t countTransits = 0;    /* lights LED_builtin if Transits active   */
 
                                                /* loop all channels        */
   for( uint8_t ch = 0; ch < CHANSIZE; ch++ )
   {
-    if( var[ch].state != STEADY )          /* is state TRANSIT or DELAY?   */
+    if( var[ch].state != STEADY )                  /* state not steady?    */
     {
       var[ch].msCount++;
       
-      if( var[ch].state == DELAY )         /* is state DELAY?              */
+      if( var[ch].state == DELAY )                 /* is state DELAY?      */
       {
 
-        if( var[ch].msCount > 1000 )
+        if( var[ch].msCount > 1000 )               /* count delay seconds  */
         {
           var[ch].msCount = 0;
           var[ch].secCount++;
           
           if( var[ch].secCount > CONFIG[adr][ch].secDelay[var[ch].phase] )
           {
-            //printVar( ch ); /* debug */
-            
-            var[ch].state = TRANSIT;               /* end DELAY            */
+            var[ch].state = TRANSIT;               /* end state DELAY      */
             var[ch].secCount = 0;
           }
         }
       }
-      else                                         /* so, in TRANSIT       */
+      else                                         /* so, in state TRANSIT */
       {
         countTransits++;                           /* drives LED_builtin   */
         
@@ -264,10 +291,10 @@ void processChannels()          /*! This is an ISR which runs every 1 ms  !*/
           { 
             var[ch].state = STEADY;                /* dc transit complete  */
             
-            switch( CONFIG[adr][ch].mode )         /* trigger new phase    */
+            switch( CONFIG[adr][ch].mode )         /* trigger a new phase  */
             {
               case NIGHTONOFF :
-                if( input == 1 )
+                if( input == NIGHT )
                 {
                   var[ch].phase = ! var[ch].phase;
                   var[ch].state = DELAY;
@@ -304,7 +331,7 @@ void processChannels()          /*! This is an ISR which runs every 1 ms  !*/
           }
           else              /* in Transit, current dc is GT or LT target dc */
           {
-            if( var[ch].dc > CONFIG[adr][ch].dc[var[ch].phase] )
+            if( var[ch].dc > CONFIG[adr][ch].dc[var[ch].phase] )  /* which? */
             {
               var[ch].dc--;                              /* GT so decrement */
             }
@@ -312,9 +339,8 @@ void processChannels()          /*! This is an ISR which runs every 1 ms  !*/
             {
               var[ch].dc++;                              /* LT so increment */
             }
-            //printVar( ch ); /* debug */
 
-            analogWrite( PWMPIN[ch], GAMMA8[var[ch].dc] );
+            analogWrite( PWMPIN[ch], GAMMA8[var[ch].dc] );    /* set new dc */
             
           }  /* end GT or LT                 */
         }  /* end msCount > msPerStep        */
@@ -322,9 +348,9 @@ void processChannels()          /*! This is an ISR which runs every 1 ms  !*/
     }  /* end if state NOT steady            */
   }  /* next ch                              */
 
-  digitalWrite( LED_BUILTIN, countTransits );     /* 0 LED off, >0 LED on */
+  digitalWrite( LED_BUILTIN, countTransits );     /* show TRANSIT activity */
 
-  PORTC = PORTC & B10111111;           /* PIN ISRTIME = D31 aka PC6 = low */
+  PORTC = PORTC & B10111111;           /* PIN ISRTIME = D31 aka PC6 = low  */
 }
 
 
@@ -383,8 +409,7 @@ bool isInputChanged()
 {
   static uint32_t msStamp  = 0;             /* timestamp last input change */
 
-  char str[20];
-  static const char fmt[] = "input %u";
+  static const char sInput[2][8] = {"0:Day", "1:Night"};
   
   bool rawInput = digitalRead( PININPUT );
 
@@ -395,14 +420,17 @@ bool isInputChanged()
   
   if( ( rawInput != input ) && ( millis() > msStamp + 15 ) )
   {
-    input = ! input;  /* invert */
+    if( input == DAY )   /* invert */
+      input = NIGHT; 
+    else
+      input = DAY;
 
     msStamp = millis();
 
     digitalWrite( PINLEDGRN, input );
 
-    sprintf( str, fmt, input );
-    Serial.println( str );
+    Serial.print("input ");
+    Serial.println( sInput[input] );
 
     return true;
   }
@@ -413,43 +441,52 @@ bool isInputChanged()
 
 /*------------------------------ isLEDsupplyOK() -----------------------------
  * 
- * if blue LED is not lit, the 12 V line fail or PolyFuse tripped
+ * if blue LED is not lit, the 12 V line failed or PolyFuse tripped
 */
+
 bool isLEDsupplyOK()
 { 
   if( digitalRead( PINBLUE ) == 0 )
   {
     Serial.println("PolyFuse/12V fail");
     
-    digitalWrite( PINLEDRED, HIGH );
     return false;
   }
-  digitalWrite( PINLEDRED, LOW );
   return true;  
 }
 
 
 
-
 /*------------------------------- setDCmin() ----------------------------
- * In case of over Amps. set all channel duty cycle to min
- * If setdc > 0 set to that value. If setdc = 0 then restore running dc
+ * In case of over Amps, set all channel duty cycle to emergency low
+ * 
+ * Simplified in V1.01 code change.
 */
-void setDCmin( uint8_t setdc )
+
+void setDCmin( uint8_t setval )
 {
   for( uint8_t ch = 0; ch < CHANSIZE; ch++ )
   {
-    if( setdc > 0 )
+    if( setval < var[ch].dc )
     {
-      if( setdc < var[ch].dc )
-      {
-        analogWrite( PWMPIN[ch], setdc );
-      }
+      analogWrite( PWMPIN[ch], setval );
     }
-    else
-    {
-      analogWrite( PWMPIN[ch], var[ch].dc );
-    }
+  }
+}
+
+
+
+/*------------------------------- restoreDC() ----------------------------
+ * restore running dc
+ * 
+ * New in V1.01 code change.
+*/
+
+void restoreDC()
+{
+  for( uint8_t ch = 0; ch < CHANSIZE; ch++ )
+  {
+    analogWrite( PWMPIN[ch], var[ch].dc );
   }
 }
 
@@ -457,22 +494,19 @@ void setDCmin( uint8_t setdc )
 
 /*------------------------------ isOverAmp() ------------------------------
  * 
- * read sense resistor to measure Amps 
- * returns true if over Amp
+ * read Volts on sense resistor to measure Amps.  returns true if over Amp
+ * 
+ * V1.01 code change, simplified.
+ * Schematic change: C3 sense RC filter. Change 0.1 uF to 1.0 uF. PCB OK.
 */
 
 bool isOverAmp()
 {
+  const uint16_t SENSEAMP = 100 ;            /* 2 Amp ADC threshold      */
 
   amps = analogRead( PINSENSE );
   
-  if( amps > SENSEAMP )
-  {
-    digitalWrite( PINLEDRED, HIGH );
-    return true;
-  }
-  digitalWrite( PINLEDRED, LOW );
-  return false;
+  return ( amps > SENSEAMP );
 }
 
 
@@ -480,37 +514,51 @@ bool isOverAmp()
 /*----------------------------------- testPower() ----------------------------
  * 
  * If over Amp then alarm and reduce all duty cycles
+ * 
+ * Rewrite in V1.01 code change.
 */
 void testPower()
 {
-  uint8_t setdc = 10;
+  uint8_t emergencyDC = 8;
   
   if( isOverAmp() == true )
   {
-    Serial.print( amps );
-    Serial.println(" OverAmp");
+    digitalWrite( PINLEDRED, 1 );
     
-    soundAlarm( 1 );
+    Serial.print("OverAmp");
+    printAmps();
     
     noInterrupts();                  /* stop ISR processing LED channels    */
     
     while( isOverAmp() == true )
     {
-      if( setdc > 1 )
-      {
-        setDCmin( setdc-- );
-      }
-      soundAlarm( 1 );
+        soundAlarm( 1 );
+        
+        if( emergencyDC > 0 )
+        {
+          setDCmin( --emergencyDC );
+        }
     }
-    setDCmin( 0 ); /* 0 to reset to running levels */
     
-    interrupts();                   /* restart ISR processing LED channels  */
+    if( emergencyDC < 8 )
+    {
+      restoreDC();
+    }
+    
+    interrupts();                    /* restart ISR processing LED channels */
   } 
   
   while( isLEDsupplyOK() == false)
   {
+    noInterrupts();                  /* stop ISR processing LED channels    */
+    
+    digitalWrite( PINLEDRED, 1 );
     soundAlarm( 2 );
+    
+    interrupts();                    /* restart ISR processing LED channels */
   }
+  
+  digitalWrite( PINLEDRED, 0 );
 }
 
 
@@ -520,6 +568,9 @@ void testPower()
 */
 void setup() 
 {
+  Serial.begin( BAUDRATE );
+  while( ! Serial );
+  
   pinMode( PININPUT, INPUT_PULLUP ); /* Day or Night via opto isolate       */
   pinMode( PINADR0,  INPUT_PULLUP ); /* Config Address bit 2^0 jumper link  */
   pinMode( PINADR1,  INPUT_PULLUP ); /* Config Address bit 2^1 jumper link  */
@@ -542,13 +593,13 @@ void setup()
   digitalWrite( LED_BUILTIN, LOW );
   digitalWrite( PINISRTIME, LOW );
  
-  Serial.begin( BAUDRATE );
-  while( ! Serial );
   delay( 200 );
   Serial.println( sTITLE );
-  Serial.print("CONFIG.h v");
+  Serial.print("Build ");
+  Serial.print(__DATE__);
+  Serial.print(" CONFIG.h v");
   Serial.print( VERSION_CONFIG );
-  Serial.print(" ");
+  Serial.print(" '");
   Serial.println( sCONFIGNOTE );
 
   readConfigAdr();
@@ -562,7 +613,7 @@ void setup()
   Timer1.initialize( 1000 );                    /* set timer to 1 ms        */
   Timer1.attachInterrupt( processChannels );
 
-  Serial.println("send '.' for Amp, '0' for ch0 vars, ,, '9' for ch9 vars.");
+  Serial.println("send '.' for Amp, '0' for ch0 var .. '9' for ch9 var.");
 }
 
 
@@ -588,7 +639,6 @@ void loop()
     if( rx == '.' ) printAmps();
     
     if( rx >= '0' && rx <= '9' ) printVar( rx - '0' );
-    
   }
   
   delay( 1 );

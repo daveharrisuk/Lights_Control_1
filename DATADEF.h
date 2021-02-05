@@ -1,6 +1,6 @@
 /*file: DATADEF.h
  *----------------------------------------------------------------------------
- * This is include file for Lights_Control.ino sketch
+ * This is include file for Lights_Control_1.ino sketch
  * 
  * data structure definitions
  *
@@ -19,6 +19,8 @@ const uint8_t CHANSIZE = 10;  /* qty of PWM channels used for light strings */
 
 const uint8_t CONFIGSIZE = 4; /* qty of CONFIGs in sketch. Selected by Adr  */
 
+
+enum Input_t : uint8_t { DAY = 0, NIGHT = 1 };
 
 
 enum Mode_t : uint8_t 
